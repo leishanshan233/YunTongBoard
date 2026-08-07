@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yuntong.board.mapper.CardMapper">
+
+    <!-- 条件查询流转卡列表 -->
+    <select id="findList" resultType="java.util.Map">
+        SELECT c.*, t.tank_code, t.tank_name,
+               u1.username AS uploader_name, u2.username AS confirmer_name
+        FROM cards c
+        LEFT JOIN tanks t ON t.id = c.tank_id
+        LEFT JOIN users u1 ON u1.id = c.uploaded_by
+        LEFT JOIN users u2 ON u2.id = c.confirmed_by
+        <where>
+            <if test="status != null and status != ''">
+                AND c.status = #{status}
+            </if>
+            <if test="tankId != null">
+                AND c.tank_id = #{tankId}
+            </if>
+            <if test="startDate != null and startDate != ''">
+                AND c.uploaded_at &gt;= #{startDate}
+            </if>
+            <if test="endDate != null and endDate != ''">
+                AND c.uploaded_at &lt; CONCAT(#{endDate}, ' 23:59:59')
+            </if>
+        </where>
+        ORDER BY c.uploaded_at DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <!-- 条件查询总数 -->
+    <select id="countList" resultType="long">
+        SELECT COUNT(*) FROM cards c
+        <where>
+            <if test="status != null and status != ''">
+                AND c.status = #{status}
+            </if>
+            <if test="tankId != null">
+                AND c.tank_id = #{tankId}
+            </if>
+            <if test="startDate != null and startDate != ''">
+                AND c.uploaded_at &gt;= #{startDate}
+            </if>
+            <if test="endDate != null and endDate != ''">
+                AND c.uploaded_at &lt; CONCAT(#{endDate}, ' 23:59:59')
+            </if>
+        </where>
+    </select>
+
+</mapper>

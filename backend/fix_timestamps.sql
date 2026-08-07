@@ -1,0 +1,26 @@
+-- 修复脚本：为缺失默认值的时间字段补上 DEFAULT
+-- 在 MySQL 中执行：SOURCE fix_timestamps.sql;
+
+USE yuntong_board;
+
+-- 1. users 表
+ALTER TABLE users MODIFY COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间';
+ALTER TABLE users MODIFY COLUMN modified_at DATETIME NULL DEFAULT NULL COMMENT '修改时间';
+
+-- 2. tanks 表（如果也缺失）
+ALTER TABLE tanks MODIFY COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间';
+ALTER TABLE tanks MODIFY COLUMN modified_at DATETIME NULL DEFAULT NULL COMMENT '修改时间';
+
+-- 3. cards 表（注意 created_at 不要 ON UPDATE）
+ALTER TABLE cards MODIFY COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间（原上传时间）';
+ALTER TABLE cards MODIFY COLUMN modified_at DATETIME NULL DEFAULT NULL COMMENT '修改时间';
+
+-- 4. operation_logs 表
+ALTER TABLE operation_logs MODIFY COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间';
+ALTER TABLE operation_logs MODIFY COLUMN modified_at DATETIME NULL DEFAULT NULL COMMENT '修改时间';
+
+-- 5. system_config 表
+ALTER TABLE system_config MODIFY COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间';
+ALTER TABLE system_config MODIFY COLUMN modified_at DATETIME NULL DEFAULT NULL COMMENT '修改时间';
+
+SELECT '时间字段默认值修复完成' AS result;

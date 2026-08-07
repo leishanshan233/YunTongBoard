@@ -1,0 +1,66 @@
+server:
+  port: 3001
+
+spring:
+  application:
+    name: yuntong-board-backend
+  # Jackson 配置：snake_case 命名 + 时区
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    default-property-inclusion: non_null
+  # Servlet 配置：文件上传大小
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 20MB
+  # 数据源 (Druid)
+  datasource:
+    type: com.alibaba.druid.pool.DruidDataSource
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:yuntong_board}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD:1234}
+    druid:
+      initial-size: 5
+      min-idle: 5
+      max-active: 20
+      max-wait: 60000
+
+# MyBatis-Plus 配置
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  mapper-locations: classpath*:mapper/**/*.xml
+
+# JWT 配置
+jwt:
+  secret: ${JWT_SECRET:yuntong_board_jwt_secret_key_2024}
+  expires-in: 86400000  # 24小时(毫秒)
+
+# 应用配置
+app:
+  upload-path: ${UPLOAD_PATH:./uploads}
+  timeout-hours: ${TIMEOUT_HOURS:4}
+  cors-origin: ${CORS_ORIGIN:*}
+
+# netty-socketio 配置（独立端口，兼容前端 socket.io-client）
+socketio:
+  host: 0.0.0.0
+  port: 9092
+  # 允许跨域
+  origin: "*"
+
+# 日志
+logging:
+  level:
+    com.yuntong.board: debug
+    com.baomidou: warn
