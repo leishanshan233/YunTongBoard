@@ -9,14 +9,14 @@ import {
   UserOutlined,
   LogoutOutlined,
   ToolOutlined,
-  ApartmentOutlined
+  TeamOutlined
 } from '@ant-design/icons';
 import Dashboard from './Dashboard';
 import TankManagement from './TankManagement';
 import CardRecords from './CardRecords';
 import OperationLogs from './OperationLogs';
 import SystemSettings from './SystemSettings';
-import ProductionLine from './ProductionLine';
+import UserManagement from './UserManagement';
 import Login from './Login';
 import ChangePasswordModal from '../../components/ChangePasswordModal';
 import { getStoredUser, removeStoredToken } from '../../utils/auth';
@@ -41,10 +41,10 @@ function AdminLayout() {
 
   const menuItems = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '看板总览' },
-    { key: '/production-lines', icon: <ApartmentOutlined />, label: '生产线管理' },
     { key: '/tanks', icon: <AppstoreOutlined />, label: '料罐管理' },
     { key: '/cards', icon: <FileTextOutlined />, label: '流转卡记录' },
     { key: '/logs', icon: <ToolOutlined />, label: '操作日志' },
+    { key: '/users', icon: <TeamOutlined />, label: '用户管理' },
     { key: '/settings', icon: <SettingOutlined />, label: '系统设置' }
   ];
 
@@ -111,7 +111,7 @@ function AdminLayout() {
           >
             <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
               <Avatar icon={<UserOutlined />} style={{ backgroundColor: '#1890ff' }} />
-              <span style={{ fontSize: 14 }}>{user.name}</span>
+              <span style={{ fontSize: 14 }}>{user.code ? `${user.name}（${user.code}）` : user.name}</span>
             </div>
           </Dropdown>
         </Header>
@@ -126,10 +126,10 @@ function AdminLayout() {
             <Routes>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/production-lines" element={<ProductionLine />} />
               <Route path="/tanks" element={<TankManagement />} />
               <Route path="/cards" element={<CardRecords />} />
               <Route path="/logs" element={<OperationLogs />} />
+              <Route path="/users" element={<UserManagement />} />
               <Route path="/settings" element={<SystemSettings />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>

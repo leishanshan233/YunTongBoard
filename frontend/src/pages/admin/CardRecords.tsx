@@ -1,15 +1,14 @@
-import { useEffect, useState } from 'react';
-import { Table, DatePicker, Select, Button, Space, Image, Input, message, Tabs } from 'antd';
+import { useEffect, useState, useMemo } from 'react';
+import { Table, DatePicker, Select, Button, Space, Image, Input, message } from 'antd';
 import { SearchOutlined, ReloadOutlined, DownloadOutlined } from '@ant-design/icons';
-import { cardApi, productionLineApi } from '../../services/api';
+import { cardApi } from '../../services/api';
 import dayjs from 'dayjs';
+import { useTableEnhance } from '../../utils/tableEnhance';
 
 const { RangePicker } = DatePicker;
 
 export default function CardRecords() {
   const [data, setData] = useState<any[]>([]);
-  const [lines, setLines] = useState<any[]>([]);
-  const [selectedLineId, setSelectedLineId] = useState<number | 'all'>('all');
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState({
     status: undefined as string | undefined,
@@ -19,20 +18,12 @@ export default function CardRecords() {
   });
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 });
 
-  const loadLines = async () => {
-    try {
-      const res: any = await productionLineApi.getAll();
-      setLines(res.data || []);
-    } catch (e) {}
-  };
-
   const fetchData = async (page = 1) => {
     setLoading(true);
     try {
       const params: any = {
         page,
         limit: pagination.pageSize,
-        ...(selectedLineId === 'all' ? {} : { production_line_id: selectedLineId }),
         ...filters
       };
       const res: any = await cardApi.getList(params);
@@ -45,10 +36,9 @@ export default function CardRecords() {
     }
   };
 
-  useEffect(() => { loadLines(); }, []);
   useEffect(() => {
     fetchData(1);
-  }, [selectedLineId, lines.length]);
+  }, []);
 
   const handleSearch = () => {
     fetchData(1);
@@ -74,11 +64,14 @@ export default function CardRecords() {
     document.body.removeChild(link);
   };
 
-  const columns = [
+  const baseColumns = useMemo(() => [
     {
       title: '序号',
       key: 'index',
       width: 60,
+      resizable: false,
+      sortable: false,
+      searchable: false,
       render: (_: any, __: any, index: number) => (pagination.current - 1) * pagination.pageSize + index + 1
     },
     {
@@ -86,12 +79,18 @@ export default function CardRecords() {
       dataIndex: 'image_url',
       key: 'image',
       width: 100,
+      resizable: false,
+      sortable: false,
+      searchable: false,
       render: (url: string) => <Image src={url} alt="流转卡" width={60} height={60} style={{ objectFit: 'cover', borderRadius: 4 }} />
     },
     {
       title: '料罐',
       dataIndex: 'tank_code',
       key: 'tank',
+      width: 140,
+      sortable: true,
+      searchable: true,
       render: (text: string, record: any) => `${record.tank_code || ''} ${record.tank_name || ''}`
     },
     {
@@ -99,6 +98,8 @@ export default function CardRecords() {
       dataIndex: 'status',
       key: 'status',
       width: 100,
+      sortable: true,
+      searchable: true,
       render: (status: string) => {
         const statusMap: Record<string, { color: string; text: string }> = {
           pending: { color: 'orange', text: '待入库' },
@@ -113,24 +114,44 @@ export default function CardRecords() {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
+      width: 170,
+      sortable: true,
+      searchable: true,
       render: (time: string) => new Date(time).toLocaleString('zh-CN')
     },
     {
       title: '操作人',
       dataIndex: 'created_user_name',
       key: 'created_user',
-      render: (text: string) => text || '-'
+      width: 160,
+      sortable: true,
+      searchable: true,
+      render: (text: string, record: any) => {
+        if (!text) return '-';
+        const code = record.created_user_code;
+        return code ? `${text}（${code}）` : text;
+      }
     },
     {
       title: '确认人',
       dataIndex: 'confirmer_name',
       key: 'confirmer',
-      render: (text: string) => text || '-'
+      width: 160,
+      sortable: true,
+      searchable: true,
+      render: (text: string, record: any) => {
+        if (!text) return '-';
+        const code = record.confirmer_code;
+        return code ? `${text}（${code}）` : text;
+      }
     },
     {
       title: '确认时间',
       dataIndex: 'confirmed_at',
       key: 'confirmed_at',
+      width: 170,
+      sortable: true,
+      searchable: true,
       render: (time: string) => time ? new Date(time).toLocaleString('zh-CN') : '-'
     },
     {
@@ -138,29 +159,22 @@ export default function CardRecords() {
       key: 'action',
       width: 100,
       fixed: 'right' as const,
+      resizable: false,
+      sortable: false,
+      searchable: false,
       render: (_: any, record: any) => (
         <Button type="link" size="small" icon={<DownloadOutlined />} onClick={() => handleDownload(record)}>
           下载
         </Button>
       )
     }
-  ];
+  ], [pagination.current, pagination.pageSize, handleDownload]);
+
+  const { columns: enhancedColumns, filteredData } = useTableEnhance(baseColumns, data);
 
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>流转卡记录</h2>
-        <Tabs
-          tabPosition="top"
-          activeKey={String(selectedLineId)}
-          onChange={(k) => setSelectedLineId(k === 'all' ? 'all' : Number(k))}
-          size="small"
-          items={[
-            { key: 'all', label: '全部' },
-            ...lines.map(l => ({ key: String(l.id), label: l.name }))
-          ]}
-        />
-      </div>
+      <h2 style={{ marginBottom: 16 }}>流转卡记录</h2>
       
       <Space style={{ marginBottom: 16 }} wrap>
         <Input
@@ -201,8 +215,8 @@ export default function CardRecords() {
       </Space>
 
       <Table
-        columns={columns}
-        dataSource={data}
+        columns={enhancedColumns}
+        dataSource={filteredData}
         rowKey="id"
         loading={loading}
         pagination={{

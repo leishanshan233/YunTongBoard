@@ -21,7 +21,6 @@ CREATE TABLE IF NOT EXISTS tanks (
   current_card_id INT NULL COMMENT '当前流转卡ID',
   created_user_id INT NULL COMMENT '创建人ID',
   modified_user_id INT NULL COMMENT '修改人ID',
-  deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除：0-未删除 1-已删除',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   modified_at DATETIME NULL COMMENT '修改时间',
   UNIQUE KEY uk_tank_code (tank_code)

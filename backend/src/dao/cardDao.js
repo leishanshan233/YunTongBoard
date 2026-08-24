@@ -3,7 +3,8 @@ const { pool } = require('../config/db');
 const findById = async (id) => {
   const [rows] = await pool.execute(`
     SELECT c.*, t.tank_code, t.tank_name,
-      u1.name AS created_user_name, u2.name AS confirmer_name
+      u1.name AS created_user_name, u1.code AS created_user_code,
+      u2.name AS confirmer_name, u2.code AS confirmer_code
     FROM cards c
     LEFT JOIN tanks t ON t.id = c.tank_id
     LEFT JOIN users u1 ON u1.id = c.created_user_id
@@ -14,14 +15,13 @@ const findById = async (id) => {
 };
 
 const findList = async (params = {}) => {
-  const { status, tank_id, production_line_id, tank_code, start_date, end_date, page = 1, limit = 20 } = params;
+  const { status, tank_id, tank_code, start_date, end_date, page = 1, limit = 20 } = params;
   const offset = (page - 1) * limit;
   const where = ['c.deleted = 0'];
   const values = [];
 
   if (status) { where.push('c.status = ?'); values.push(status); }
   if (tank_id) { where.push('c.tank_id = ?'); values.push(tank_id); }
-  if (production_line_id) { where.push('t.production_line_id = ?'); values.push(Number(production_line_id)); }
   if (tank_code) { where.push('t.tank_code LIKE ?'); values.push(`%${tank_code}%`); }
   if (start_date) { where.push('c.created_at >= ?'); values.push(start_date); }
   if (end_date) {
@@ -30,17 +30,16 @@ const findList = async (params = {}) => {
   }
 
   const whereClause = 'WHERE ' + where.join(' AND ');
-  const needJoin = !!production_line_id || !!tank_code;
-  const joinClause = needJoin ? 'LEFT JOIN tanks t ON t.id = c.tank_id' : '';
 
   const [countRows] = await pool.execute(
-    `SELECT COUNT(*) AS count FROM cards c ${joinClause} ${whereClause}`,
+    `SELECT COUNT(*) AS count FROM cards c LEFT JOIN tanks t ON t.id = c.tank_id ${whereClause}`,
     values
   );
 
   const [rows] = await pool.execute(`
-    SELECT c.*, t.tank_code, t.tank_name, t.production_line_id,
-      u1.name AS created_user_name, u2.name AS confirmer_name
+    SELECT c.*, t.tank_code, t.tank_name,
+      u1.name AS created_user_name, u1.code AS created_user_code,
+      u2.name AS confirmer_name, u2.code AS confirmer_code
     FROM cards c
     LEFT JOIN tanks t ON t.id = c.tank_id
     LEFT JOIN users u1 ON u1.id = c.created_user_id
@@ -53,7 +52,6 @@ const findList = async (params = {}) => {
   return { total: countRows[0].count, list: rows };
 };
 
-// 上传卡片时：tank_id 通过 findById 已能拿到 production_line_id，不需额外处理
 const create = async (conn, data) => {
   const db = conn || pool;
   const [result] = await db.execute(`
@@ -78,6 +76,14 @@ const updateStatus = async (conn, id, status, confirmUserId = null) => {
   }
 };
 
+const updateTank = async (conn, cardId, newTankId) => {
+  const db = conn || pool;
+  await db.execute(
+    'UPDATE cards SET tank_id = ?, modified_at = NOW() WHERE id = ?',
+    [newTankId, cardId]
+  );
+};
+
 const remove = async (conn, id, modifiedUserId = null) => {
   const db = conn || pool;
   await db.execute(
@@ -99,7 +105,8 @@ const getHistory = async (params = {}) => {
   const offset = (page - 1) * limit;
   const [rows] = await pool.execute(`
     SELECT c.*, t.tank_code, t.tank_name,
-      u1.name AS created_user_name, u2.name AS confirmer_name
+      u1.name AS created_user_name, u1.code AS created_user_code,
+      u2.name AS confirmer_name, u2.code AS confirmer_code
     FROM cards c
     LEFT JOIN tanks t ON t.id = c.tank_id
     LEFT JOIN users u1 ON u1.id = c.created_user_id
@@ -116,6 +123,7 @@ module.exports = {
   findList,
   create,
   updateStatus,
+  updateTank,
   remove,
   countTodayConfirmed,
   getHistory

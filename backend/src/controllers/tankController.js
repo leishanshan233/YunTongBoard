@@ -10,15 +10,12 @@ const parseDateToTs = (dateStr) => {
   return isNaN(ts) ? 0 : ts;
 };
 
-// 获取所有料罐（含当前流转卡）— 扁平结构，前端可直接访问。支持 ?production_line_id=X
+// 获取所有料罐（含当前流转卡）— 扁平结构，前端可直接访问
 const getAllTanks = async (req, res) => {
   try {
-    const filter = {};
-    if (req.query.production_line_id) filter.production_line_id = req.query.production_line_id;
-    const tanks = await tankDao.findAll(filter);
+    const tanks = await tankDao.findAll();
     const result = tanks.map(t => ({
       id: t.id,
-      production_line_id: t.production_line_id || null,
       tank_code: t.tank_code,
       tank_name: t.tank_name,
       row_index: t.row_index,
@@ -56,9 +53,7 @@ const getTankById = async (req, res) => {
 
 const getEmptyTanks = async (req, res) => {
   try {
-    const filter = {};
-    if (req.query.production_line_id) filter.production_line_id = req.query.production_line_id;
-    const tanks = await tankDao.findEmpty(filter);
+    const tanks = await tankDao.findEmpty();
     res.json({ success: true, data: tanks });
   } catch (error) {
     console.error('获取空罐位失败:', error);
@@ -68,12 +63,11 @@ const getEmptyTanks = async (req, res) => {
 
 const createTank = async (req, res) => {
   try {
-    const { production_line_id, tank_code, tank_name, row_index, col_index } = req.body;
+    const { tank_code, tank_name, row_index, col_index } = req.body;
     if (await tankDao.findByCode(tank_code)) {
       return res.status(400).json({ success: false, message: '罐号已存在' });
     }
     const id = await tankDao.create(null, {
-      production_line_id: production_line_id ? Number(production_line_id) : null,
       tank_code, tank_name, row_index, col_index,
       created_user_id: req.user.id
     });
@@ -90,9 +84,8 @@ const updateTank = async (req, res) => {
     if (!tank) {
       return res.status(404).json({ success: false, message: '料罐不存在' });
     }
-    const { production_line_id, tank_code, tank_name, row_index, col_index } = req.body;
+    const { tank_code, tank_name, row_index, col_index } = req.body;
     await tankDao.update(null, req.params.id, {
-      production_line_id: production_line_id !== undefined ? Number(production_line_id) : tank.production_line_id,
       tank_code: tank_code || tank.tank_code,
       tank_name: tank_name ?? tank.tank_name,
       row_index: row_index ?? tank.row_index,
@@ -165,12 +158,11 @@ const forceClearTank = async (req, res) => {
   }
 };
 
-// 获取看板布局，支持按生产线隔离。?production_line_id=X
+// 获取看板布局
 const getBoardLayout = async (req, res) => {
   try {
-    const lineId = req.query.production_line_id ? String(req.query.production_line_id) + '_' : '';
-    const columns = await configDao.getValue(`${lineId}board_columns`, '4');
-    const rows = await configDao.getValue(`${lineId}board_rows`, '3');
+    const columns = await configDao.getValue('board_columns', '4');
+    const rows = await configDao.getValue('board_rows', '3');
     res.json({ success: true, data: { columns: Number(columns), rows: Number(rows) } });
   } catch (error) {
     console.error('获取看板布局失败:', error);
@@ -180,11 +172,9 @@ const getBoardLayout = async (req, res) => {
 
 const updateBoardLayout = async (req, res) => {
   try {
-    const { columns, rows, production_line_id } = req.body;
+    const { columns, rows } = req.body;
     const newColumns = Number(columns);
     const newRows = Number(rows);
-    const lineId = production_line_id ? Number(production_line_id) : null;
-    const linePrefix = lineId ? String(lineId) + '_' : '';
 
     if (!newColumns || !newRows || newColumns < 1 || newRows < 1) {
       return res.status(400).json({ success: false, message: '行列数必须大于0' });
@@ -193,18 +183,14 @@ const updateBoardLayout = async (req, res) => {
     const totalCells = newColumns * newRows;
 
     await withTransaction(async (conn) => {
-      // 1. 更新布局配置（按生产线隔离）
-      await configDao.upsert(conn, `${linePrefix}board_columns`, String(newColumns), req.user.id);
-      await configDao.upsert(conn, `${linePrefix}board_rows`, String(newRows), req.user.id);
+      // 1. 更新布局配置
+      await configDao.upsert(conn, 'board_columns', String(newColumns), req.user.id);
+      await configDao.upsert(conn, 'board_rows', String(newRows), req.user.id);
 
-      // 2. 获取指定生产线的料罐，按原位置排序
-      const tankFilter = lineId ? ' AND t.production_line_id = ?' : '';
-      const tankParams = lineId ? [lineId] : [];
+      // 2. 获取所有料罐，按原位置排序
       const [allTanks] = await conn.query(
-        `SELECT t.id, t.row_index, t.col_index FROM tanks t 
-         WHERE t.deleted = 0 ${tankFilter} 
-         ORDER BY t.row_index ASC, t.col_index ASC`,
-        tankParams
+        `SELECT id, row_index, col_index FROM tanks
+         ORDER BY row_index ASC, col_index ASC`
       );
 
       // 3. 重新映射位置：按顺序分配到新布局
@@ -249,9 +235,7 @@ const batchUpdatePositions = async (req, res) => {
 
 const getBoardStats = async (req, res) => {
   try {
-    const filter = {};
-    if (req.query.production_line_id) filter.production_line_id = req.query.production_line_id;
-    const tanks = await tankDao.findAll(filter);
+    const tanks = await tankDao.findAll();
     const todayConfirmed = await cardDao.countTodayConfirmed();
     const stats = {
       totalTanks: tanks.length,

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Card, Row, Col, Tag, Button, Table, Space, Modal, Image, Badge, Tabs } from 'antd';
+import { useEffect, useState, useMemo } from 'react';
+import { Card, Row, Col, Tag, Button, Table, Space, Modal, Image, Badge, Select, message } from 'antd';
 import {
   ReloadOutlined,
   PlusOutlined,
@@ -9,9 +9,11 @@ import {
   ClockCircleOutlined,
   WarningOutlined,
   CheckCircleOutlined,
-  InboxOutlined
+  InboxOutlined,
+  SwapOutlined
 } from '@ant-design/icons';
-import { tankApi, productionLineApi } from '../../services/api';
+import { tankApi, cardApi, systemApi } from '../../services/api';
+import { useTableEnhance } from '../../utils/tableEnhance';
 
 // 格式化挂卡时长
 const formatDuration = (seconds: number) => {
@@ -38,33 +40,37 @@ const formatTime = (time: string) => {
 export default function Dashboard() {
   const [stats, setStats] = useState<any>({});
   const [tanks, setTanks] = useState<any[]>([]);
-  const [lines, setLines] = useState<any[]>([]);
-  const [selectedLineId, setSelectedLineId] = useState<number | 'all'>('all');
   const [loading, setLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState('all');
   const [previewCard, setPreviewCard] = useState<any>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editingTank, setEditingTank] = useState<any>(null);
+  const [moveModalOpen, setMoveModalOpen] = useState(false);
+  const [movingTank, setMovingTank] = useState<any>(null);
+  const [targetTankId, setTargetTankId] = useState<number | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [timeoutHours, setTimeoutHours] = useState(4);
 
-  const loadLines = async () => {
-    try {
-      const res: any = await productionLineApi.getAll();
-      setLines(res.data || []);
-      if ((res.data || []).length > 0) setSelectedLineId(res.data[0].id);
-    } catch (e) {}
+  // 判断罐位是否超时（与 Board 逻辑一致：动态计算）
+  const isTimeout = (t: any) => {
+    if (!t || !t.current_card_id) return false;
+    return t.status === 'timeout' || calcWaitSec(t.created_at_ts) > timeoutHours * 3600;
   };
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const lineQuery: any = selectedLineId === 'all' ? {} : { production_line_id: selectedLineId };
-      const [statsRes, tanksRes]: any = await Promise.all([
-        tankApi.getStats(lineQuery),
-        tankApi.getAll(lineQuery)
+      const [statsRes, tanksRes, timeoutRes]: any = await Promise.all([
+        tankApi.getStats(),
+        tankApi.getAll(),
+        systemApi.getConfig('timeout_hours').catch(() => ({ success: false }))
       ]);
       setStats(statsRes.data || {});
       setTanks(tanksRes.data || []);
+      if (timeoutRes.success) {
+        setTimeoutHours(parseInt(timeoutRes.data.config_value) || 4);
+      }
     } catch (error) {
       console.error('获取数据失败:', error);
     } finally {
@@ -72,20 +78,18 @@ export default function Dashboard() {
     }
   };
 
-  useEffect(() => { loadLines(); }, []);
   useEffect(() => {
-    if (selectedLineId === 'all' && lines.length === 0) return;
     fetchData();
     const timer = setInterval(fetchData, 10000);
     return () => clearInterval(timer);
-  }, [selectedLineId, lines.length]);
+  }, []);
 
   const getFilteredTanks = () => {
     switch (activeFilter) {
       case 'pending':
-        return tanks.filter(t => t.current_card_id && t.status !== 'timeout');
+        return tanks.filter(t => t.current_card_id && !isTimeout(t));
       case 'timeout':
-        return tanks.filter(t => t.status === 'timeout');
+        return tanks.filter(t => isTimeout(t));
       case 'idle':
         return tanks.filter(t => !t.current_card_id || t.status === 'idle');
       default:
@@ -119,15 +123,58 @@ export default function Dashboard() {
     setEditOpen(true);
   };
 
-  const columns = [
-    { title: '罐号', dataIndex: 'tank_code', key: 'tank_code', width: 90, fixed: 'left' as const },
+  // 移动流转卡
+  const handleMoveCard = (tank: any) => {
+    setMovingTank(tank);
+    setTargetTankId(null);
+    setMoveModalOpen(true);
+  };
+
+  const handleMoveSubmit = async () => {
+    if (!movingTank?.current_card_id) {
+      message.error('该罐位无流转卡');
+      return;
+    }
+    if (!targetTankId) {
+      message.error('请选择目标料罐');
+      return;
+    }
+    setMoving(true);
+    try {
+      await cardApi.move(movingTank.current_card_id, targetTankId);
+      message.success('流转卡移动成功');
+      setMoveModalOpen(false);
+      setMovingTank(null);
+      setTargetTankId(null);
+      fetchData();
+    } catch (error: any) {
+      message.error(error.message || '移动失败');
+    } finally {
+      setMoving(false);
+    }
+  };
+
+  const moveTargetOptions = useMemo(() => {
+    if (!movingTank) return [];
+    return tanks
+      .filter(t => t.id !== movingTank.id && !t.current_card_id && t.status === 'idle')
+      .map(t => ({
+        value: t.id,
+        label: `${t.tank_code}${t.tank_name ? `（${t.tank_name}）` : ''} · 第${t.row_index + 1}行第${t.col_index + 1}列`
+      }));
+  }, [tanks, movingTank]);
+
+  const baseColumns = useMemo(() => [
+    { title: '罐号', dataIndex: 'tank_code', key: 'tank_code', width: 90, fixed: 'left' as const, sortable: true, searchable: true },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
       width: 100,
+      sortable: true,
+      searchable: true,
       render: (status: string, record: any) => {
-        if (status === 'timeout' || (record.current_card_id && calcWaitSec(record.created_at_ts) > 4 * 3600)) {
+        if (isTimeout(record)) {
           return <Tag color="red"><WarningOutlined /> 超时</Tag>;
         }
         if (record.current_card_id) {
@@ -141,6 +188,9 @@ export default function Dashboard() {
       dataIndex: 'image_url',
       key: 'image_url',
       width: 120,
+      resizable: false,
+      sortable: false,
+      searchable: false,
       render: (url: string, record: any) => {
         if (!record.current_card_id) return <span style={{ color: '#bbb' }}>—</span>;
         return url ? (
@@ -154,10 +204,14 @@ export default function Dashboard() {
       title: '上传人',
       dataIndex: 'created_user_name',
       key: 'created_user_name',
-      width: 120,
+      width: 150,
+      sortable: true,
+      searchable: true,
       render: (text: string, record: any) => {
         if (!record.current_card_id) return <span style={{ color: '#bbb' }}>—</span>;
-        return text || '—';
+        if (!text) return '—';
+        const code = record.created_user_code;
+        return code ? `${text}（${code}）` : text;
       }
     },
     {
@@ -165,6 +219,8 @@ export default function Dashboard() {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 170,
+      sortable: true,
+      searchable: true,
       render: (time: string, record: any) => {
         if (!record.current_card_id) return <span style={{ color: '#bbb' }}>—</span>;
         return formatTime(time);
@@ -174,13 +230,15 @@ export default function Dashboard() {
       title: '挂卡时长',
       key: 'wait_duration',
       width: 120,
+      sortable: true,
+      searchable: false,
       render: (_: any, record: any) => {
         if (!record.current_card_id) return <span style={{ color: '#bbb' }}>—</span>;
         const secs = calcWaitSec(record.created_at_ts);
-        const isTimeout = record.status === 'timeout' || secs > 4 * 3600;
+        const timeout = isTimeout(record);
         return (
-          <span style={{ color: isTimeout ? '#ff4d4f' : '#fa8c16', fontWeight: isTimeout ? 600 : 400 }}>
-            {isTimeout && <WarningOutlined />} {formatDuration(secs)}
+          <span style={{ color: timeout ? '#ff4d4f' : '#fa8c16', fontWeight: timeout ? 600 : 400 }}>
+            {timeout && <WarningOutlined />} {formatDuration(secs)}
           </span>
         );
       }
@@ -188,8 +246,11 @@ export default function Dashboard() {
     {
       title: '操作',
       key: 'action',
-      width: 160,
+      width: 220,
       fixed: 'right' as const,
+      resizable: false,
+      sortable: false,
+      searchable: false,
       render: (_: any, record: any) => (
         <Space size="small">
           {record.current_card_id ? (
@@ -202,6 +263,11 @@ export default function Dashboard() {
             </Button>
           )}
           {record.current_card_id && (
+            <Button size="small" icon={<SwapOutlined />} type="link" onClick={() => handleMoveCard(record)}>
+              移动
+            </Button>
+          )}
+          {record.current_card_id && (
             <Button size="small" danger icon={<ClearOutlined />} type="link" onClick={() => handleForceClear(record.id)}>
               强制清空
             </Button>
@@ -209,12 +275,15 @@ export default function Dashboard() {
         </Space>
       )
     }
-  ];
+  ], [handleView, handleEdit, handleForceClear, handleMoveCard]);
+
+  const filteredTanks = useMemo(() => getFilteredTanks(), [activeFilter, tanks]);
+  const { columns: enhancedColumns, filteredData } = useTableEnhance(baseColumns, filteredTanks);
 
   const tabs = [
     { key: 'all', label: `全部 ${tanks.length}` },
-    { key: 'pending', label: `待入库 ${tanks.filter(t => t.current_card_id && t.status !== 'timeout').length}` },
-    { key: 'timeout', label: `超时 ${tanks.filter(t => t.status === 'timeout').length}` },
+    { key: 'pending', label: `待入库 ${tanks.filter(t => t.current_card_id && !isTimeout(t)).length}` },
+    { key: 'timeout', label: `超时 ${tanks.filter(t => isTimeout(t)).length}` },
     { key: 'idle', label: `空位 ${tanks.filter(t => !t.current_card_id).length}` }
   ];
 
@@ -222,20 +291,7 @@ export default function Dashboard() {
     <div>
       {/* 顶部操作栏 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <h2 style={{ margin: 0 }}>看板总览 / 料罐状态管理</h2>
-          <Tabs
-            tabPosition="top"
-            activeKey={String(selectedLineId)}
-            onChange={(k) => setSelectedLineId(k === 'all' ? 'all' : Number(k))}
-            style={{ marginLeft: 8 }}
-            size="small"
-            items={[
-              { key: 'all', label: '全部' },
-              ...lines.map(l => ({ key: String(l.id), label: l.name }))
-            ]}
-          />
-        </div>
+        <h2 style={{ margin: 0 }}>看板总览 / 料罐状态管理</h2>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新数据</Button>
           <Button type="primary" icon={<PlusOutlined />}>新增料罐</Button>
@@ -270,12 +326,12 @@ export default function Dashboard() {
                   {Array.from({ length: 12 }).map((_, i) => {
                     const tank = tanks[i];
                     const hasCard = tank?.current_card_id;
-                    const isTimeout = tank?.status === 'timeout';
+                    const timeout = isTimeout(tank);
                     return (
                       <div
                         key={i}
                         style={{
-                          background: isTimeout ? '#ff4d4f' : hasCard ? '#fa8c16' : '#4a5568',
+                          background: timeout ? '#ff4d4f' : hasCard ? '#fa8c16' : '#4a5568',
                           borderRadius: 2,
                           opacity: 0.85
                         }}
@@ -306,7 +362,7 @@ export default function Dashboard() {
               <Card bodyStyle={{ padding: 12, textAlign: 'center' }}>
                 <div style={{ color: '#fa8c16', fontSize: 13, marginBottom: 4 }}>待入库</div>
                 <div style={{ fontSize: 28, fontWeight: 700, color: '#fa8c16' }}>
-                  {tanks.filter(t => t.current_card_id && t.status !== 'timeout').length}
+                  {tanks.filter(t => t.current_card_id && !isTimeout(t)).length}
                 </div>
               </Card>
             </Col>
@@ -314,7 +370,7 @@ export default function Dashboard() {
               <Card bodyStyle={{ padding: 12, textAlign: 'center' }}>
                 <div style={{ color: '#ff4d4f', fontSize: 13, marginBottom: 4 }}>超时预警</div>
                 <div style={{ fontSize: 28, fontWeight: 700, color: '#ff4d4f' }}>
-                  {tanks.filter(t => t.status === 'timeout').length}
+                  {tanks.filter(t => isTimeout(t)).length}
                 </div>
               </Card>
             </Col>
@@ -361,13 +417,17 @@ export default function Dashboard() {
         }
       >
         <Table
-          columns={columns}
-          dataSource={getFilteredTanks()}
+          columns={enhancedColumns}
+          dataSource={filteredData}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 10, showSizeChanger: false }}
+          pagination={{
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (total) => `共 ${total} 条`
+          }}
           scroll={{ x: 1100 }}
-          rowClassName={(record: any) => record.status === 'timeout' ? 'row-timeout' : ''}
+          rowClassName={(record: any) => isTimeout(record) ? 'row-timeout' : ''}
         />
       </Card>
 
@@ -395,12 +455,18 @@ export default function Dashboard() {
             <div style={{ marginTop: 16, textAlign: 'left', padding: '12px 16px', background: '#f5f5f5', borderRadius: 6 }}>
               <div style={{ marginBottom: 8 }}><strong>料罐编号：</strong>{previewCard.tank_code}</div>
               <div style={{ marginBottom: 8 }}><strong>状态：</strong>
-                {previewCard.status === 'timeout' ? <Tag color="red">超时</Tag> : <Tag color="orange">待入库</Tag>}
+                {isTimeout(previewCard) ? <Tag color="red">超时</Tag> : <Tag color="orange">待入库</Tag>}
               </div>
-              <div style={{ marginBottom: 8 }}><strong>上传人：</strong>{previewCard.created_user_name || '—'}</div>
+              <div style={{ marginBottom: 8 }}><strong>上传人：</strong>
+                {previewCard.created_user_name
+                  ? previewCard.created_user_code
+                    ? `${previewCard.created_user_name}（${previewCard.created_user_code}）`
+                    : previewCard.created_user_name
+                  : '—'}
+              </div>
               <div style={{ marginBottom: 8 }}><strong>挂卡时间：</strong>{formatTime(previewCard.created_at)}</div>
               <div><strong>挂卡时长：</strong>
-                <span style={{ color: previewCard.status === 'timeout' ? '#ff4d4f' : '#fa8c16', fontWeight: 600 }}>
+                <span style={{ color: isTimeout(previewCard) ? '#ff4d4f' : '#fa8c16', fontWeight: 600 }}>
                   {formatDuration(calcWaitSec(previewCard.created_at_ts))}
                 </span>
               </div>
@@ -426,6 +492,45 @@ export default function Dashboard() {
               fetchData();
             }}
           />
+        )}
+      </Modal>
+
+      {/* 移动流转卡弹窗 */}
+      <Modal
+        title="移动流转卡"
+        open={moveModalOpen}
+        onCancel={() => { setMoveModalOpen(false); setMovingTank(null); setTargetTankId(null); }}
+        footer={[
+          <Button key="cancel" onClick={() => { setMoveModalOpen(false); setMovingTank(null); setTargetTankId(null); }}>取消</Button>,
+          <Button key="submit" type="primary" loading={moving} onClick={handleMoveSubmit}>
+            确认移动
+          </Button>
+        ]}
+        width={440}
+      >
+        {movingTank && (
+          <div>
+            <div style={{ marginBottom: 12, padding: '10px 14px', background: '#f5f5f5', borderRadius: 6 }}>
+              <div style={{ marginBottom: 4 }}><strong>源料罐：</strong>{movingTank.tank_code}{movingTank.tank_name ? `（${movingTank.tank_name}）` : ''}</div>
+              <div><strong>流转卡ID：</strong>{movingTank.current_card_id}</div>
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ display: 'block', marginBottom: 6, color: '#333' }}>选择目标料罐 <span style={{ color: '#ff4d4f' }}>*</span></label>
+              <Select
+                style={{ width: '100%' }}
+                placeholder="请选择空闲罐位"
+                value={targetTankId}
+                onChange={(v) => setTargetTankId(v)}
+                options={moveTargetOptions}
+                notFoundContent="无可用空位"
+                showSearch
+                optionFilterProp="label"
+              />
+            </div>
+            <div style={{ color: '#999', fontSize: 12 }}>
+              💡 仅可选择空闲状态的料罐。移动后源罐位将变为空位，目标罐位变为待入库。
+            </div>
+          </div>
         )}
       </Modal>
 

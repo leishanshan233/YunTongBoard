@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button, Toast, ActionSheet } from 'antd-mobile';
 import { UserOutlined, SettingOutlined, LogoutOutlined } from '@ant-design/icons';
-import { tankApi, cardApi, userApi, productionLineApi } from '../../services/api';
+import { tankApi, cardApi, userApi } from '../../services/api';
 import { setStoredToken, setStoredUser, isAuthenticated, getStoredUser, removeStoredToken } from '../../utils/auth';
 import ChangePasswordModal from '../../components/ChangePasswordModal';
 import './PdaApp.css';
@@ -22,25 +22,14 @@ interface PendingUpload {
   created_at: number;
 }
 
-interface ProductionLine {
-  id: number;
-  code: string;
-  name: string;
-  sort_order: number;
-}
-
 const PENDING_KEY = 'pda_pending_uploads';
-const LINE_STORAGE_KEY = 'pda_selected_line';
 
 export default function PdaApp() {
-  const [page, setPage] = useState<'login' | 'selectLine' | 'home'>('login');
+  const [page, setPage] = useState<'login' | 'home'>('login');
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState(getStoredUser());
-
-  const [productionLines, setProductionLines] = useState<ProductionLine[]>([]);
-  const [selectedLine, setSelectedLine] = useState<ProductionLine | null>(null);
 
   const [tanks, setTanks] = useState<Tank[]>([]);
   const [photo, setPhoto] = useState<string | null>(null);
@@ -56,37 +45,13 @@ export default function PdaApp() {
   const [showCamera, setShowCamera] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // 从 sessionStorage 恢复已选生产线
-  const restoreSelectedLine = (): ProductionLine | null => {
-    try {
-      const raw = sessionStorage.getItem(LINE_STORAGE_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch { return null; }
-  };
-
   useEffect(() => {
     if (isAuthenticated()) {
-      // 先恢复生产线
-      const saved = restoreSelectedLine();
-      if (saved) {
-        setSelectedLine(saved);
-        setPage('home');
-        fetchAllTanks();
-        loadPendingUploads();
-      } else {
-        setPage('selectLine');
-        loadProductionLines();
-        loadPendingUploads();
-      }
+      setPage('home');
+      fetchAllTanks();
+      loadPendingUploads();
     }
   }, []);
-
-  const loadProductionLines = async () => {
-    try {
-      const res: any = await productionLineApi.getAll();
-      setProductionLines(res.data || []);
-    } catch (e) { console.error(e); }
-  };
 
   const handleLogin = async () => {
     if (!code || !password) {
@@ -100,16 +65,8 @@ export default function PdaApp() {
       setStoredUser(res.data.user);
       setCurrentUser(res.data.user);
       Toast.show('登录成功');
-      // 登录后跳到生产线选择
-      loadProductionLines();
-      const saved = restoreSelectedLine();
-      if (saved) {
-        setSelectedLine(saved);
-        setPage('home');
-        fetchAllTanks();
-      } else {
-        setPage('selectLine');
-      }
+      setPage('home');
+      fetchAllTanks();
       loadPendingUploads();
     } catch (error: any) {
       Toast.show(error.message || '登录失败');
@@ -118,31 +75,16 @@ export default function PdaApp() {
     }
   };
 
-  const handleSelectLine = (line: ProductionLine) => {
-    setSelectedLine(line);
-    sessionStorage.setItem(LINE_STORAGE_KEY, JSON.stringify(line));
-    setPage('home');
-    setTimeout(fetchAllTanks, 50);
-  };
-
-  const handleSwitchLine = () => {
-    loadProductionLines();
-    setPage('selectLine');
-  };
-
   const handleLogout = () => {
     removeStoredToken();
     setCurrentUser(null);
-    setSelectedLine(null);
-    try { sessionStorage.removeItem(LINE_STORAGE_KEY); } catch {}
     setPage('login');
     cleanupPhoto();
   };
 
   const fetchAllTanks = async () => {
     try {
-      const params = selectedLine ? { production_line_id: selectedLine.id } : undefined;
-      const res: any = await tankApi.getAll(params);
+      const res: any = await tankApi.getAll();
       setTanks(res.data || []);
     } catch (error) {
       console.error('获取罐位失败:', error);
@@ -409,112 +351,11 @@ export default function PdaApp() {
     );
   }
 
-  // 生产线选择页
-  if (page === 'selectLine') {
-    return (
-      <div className="pda-container" style={{ background: '#f0f2f5', minHeight: '100vh' }}>
-        <header className="pda-header">
-          <div className="header-title">选择生产线</div>
-          <div className="header-user" onClick={() => { setUserMenuOpen(true); }}>
-            <span>{currentUser?.name || ''}</span>
-            <span className="header-logout">▾</span>
-          </div>
-        </header>
-
-        <div style={{ padding: 20 }}>
-          <div style={{
-            fontSize: 13,
-            color: '#6b7280',
-            marginBottom: 16,
-            padding: '10px 14px',
-            background: '#e0f2fe',
-            borderRadius: 8,
-            color: '#0369a1'
-          }}>
-            请选择要操作的生产线，不同生产线料罐独立
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {productionLines.length === 0 && (
-              <div style={{ textAlign: 'center', color: '#9ca3af', padding: 40 }}>加载中…</div>
-            )}
-            {productionLines.map(line => (
-              <div
-                key={line.id}
-                onClick={() => handleSelectLine(line)}
-                style={{
-                  background: 'white',
-                  borderRadius: 14,
-                  padding: '22px 20px',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-                  border: `2px solid ${selectedLine?.id === line.id ? '#3b82f6' : '#e5e7eb'}`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  cursor: 'pointer'
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: 12, color: '#3b82f6', letterSpacing: 1.5, marginBottom: 4 }}>
-                    {line.code}
-                  </div>
-                  <div style={{ fontSize: 19, fontWeight: 600, color: '#111827' }}>
-                    {line.name}
-                  </div>
-                </div>
-                <div style={{
-                  width: 32, height: 32, borderRadius: '50%',
-                  background: `${selectedLine?.id === line.id ? '#3b82f6' : '#e0e7eb'}`,
-                  color: `${selectedLine?.id === line.id ? 'white' : '#9ca3af'}`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 16
-                }}>
-                  {selectedLine?.id === line.id ? '✓' : '›'}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <ActionSheet
-          visible={userMenuOpen}
-          extra={
-            <div style={{ padding: 12, fontSize: 14, color: '#6b7280', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <UserOutlined style={{ color: '#3b82f6' }} />
-              {currentUser?.name || ''}（{currentUser?.code || ''}）
-            </div>
-          }
-          actions={[
-            { key: 'pwd', icon: <SettingOutlined />, text: '修改密码', danger: false },
-            { key: 'logout', icon: <LogoutOutlined />, text: '退出登录', danger: true }
-          ]}
-          onAction={(a: any) => {
-            setUserMenuOpen(false);
-            if (a.key === 'pwd') setPwdModalOpen(true);
-            if (a.key === 'logout') handleLogout();
-          }}
-          onClose={() => setUserMenuOpen(false)}
-        />
-
-        <ChangePasswordModal
-          open={pwdModalOpen}
-          onClose={() => setPwdModalOpen(false)}
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="pda-container">
       {/* 顶部栏 */}
       <header className="pda-header">
-        <div
-          className="header-title"
-          style={{ cursor: 'pointer' }}
-          onClick={handleSwitchLine}
-          title="点击切换生产线"
-        >
-          🏭 {selectedLine?.name || '流转卡上传'} <span style={{ fontSize: 11, opacity: 0.65, marginLeft: 6 }}>▾</span>
-        </div>
+        <div className="header-title">流转卡上传</div>
         <div className="header-user" onClick={() => setUserMenuOpen(true)}>
           <span>{currentUser?.name || ''}</span>
           <span className="header-logout">▾</span>

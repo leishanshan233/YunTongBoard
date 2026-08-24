@@ -213,6 +213,77 @@ const getCardHistory = async (req, res) => {
   }
 };
 
+// 移动流转卡到另一个料罐（事务：校验 → 更新卡的 tank_id → 旧罐置 idle → 新罐置 pending → 记日志）
+const moveCard = async (req, res) => {
+  try {
+    const cardId = Number(req.params.id);
+    const { target_tank_id } = req.body;
+    if (!target_tank_id) {
+      return res.status(400).json({ success: false, message: '请选择目标料罐' });
+    }
+    const targetTankId = Number(target_tank_id);
+
+    const card = await cardDao.findById(cardId);
+    if (!card) {
+      return res.status(404).json({ success: false, message: '流转卡不存在' });
+    }
+    if (card.status !== 'pending') {
+      return res.status(400).json({ success: false, message: '仅待入库状态的流转卡可移动' });
+    }
+    if (card.tank_id === targetTankId) {
+      return res.status(400).json({ success: false, message: '目标料罐与原罐相同' });
+    }
+
+    const targetTank = await tankDao.findById(targetTankId);
+    if (!targetTank) {
+      return res.status(404).json({ success: false, message: '目标料罐不存在' });
+    }
+    if (targetTank.status !== 'idle' || targetTank.current_card_id) {
+      return res.status(400).json({ success: false, message: '目标罐位已被占用' });
+    }
+
+    const fromTankId = card.tank_id;
+    await withTransaction(async (conn) => {
+      // 1. 更新卡片归属罐
+      await cardDao.updateTank(conn, cardId, targetTankId);
+      // 2. 旧罐置空
+      await tankDao.updateStatus(conn, fromTankId, 'idle', null);
+      // 3. 新罐挂卡
+      await tankDao.updateStatus(conn, targetTankId, 'pending', cardId);
+      // 4. 记录日志（旧罐 + 新罐各一条）
+      await logDao.create(conn, {
+        created_user_id: req.user.id,
+        action: 'move',
+        tank_id: fromTankId,
+        card_id: cardId,
+        ip_address: req.ip
+      });
+      await logDao.create(conn, {
+        created_user_id: req.user.id,
+        action: 'move',
+        tank_id: targetTankId,
+        card_id: cardId,
+        ip_address: req.ip
+      });
+    });
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('card_moved', {
+        card_id: cardId,
+        from_tank_id: fromTankId,
+        to_tank_id: targetTankId,
+        tank_status: { [fromTankId]: 'idle', [targetTankId]: 'pending' }
+      });
+    }
+
+    res.json({ success: true, message: '流转卡移动成功' });
+  } catch (error) {
+    console.error('移动流转卡失败:', error);
+    res.status(500).json({ success: false, message: '移动流转卡失败' });
+  }
+};
+
 module.exports = {
-  uploadCard, getCards, getCardById, confirmCard, cancelCard, getCardHistory
+  uploadCard, getCards, getCardById, confirmCard, cancelCard, moveCard, getCardHistory
 };

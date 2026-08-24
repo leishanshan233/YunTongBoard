@@ -155,6 +155,22 @@ const deleteUser = async (req, res) => {
   }
 };
 
+// 重置用户密码为 12346
+const resetPassword = async (req, res) => {
+  try {
+    const user = await userDao.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+    const passwordHash = await bcrypt.hash('12346', 10);
+    await userDao.updatePassword(user.id, passwordHash);
+    res.json({ success: true, message: '密码已重置为 12346' });
+  } catch (error) {
+    console.error('重置密码失败:', error);
+    res.status(500).json({ success: false, message: '重置密码失败' });
+  }
+};
+
 module.exports = {
-  login, getCurrentUser, createUser, changePassword, getUsers, updateUser, deleteUser
+  login, getCurrentUser, createUser, changePassword, getUsers, updateUser, deleteUser, resetPassword
 };

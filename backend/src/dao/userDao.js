@@ -19,7 +19,7 @@ const findById = async (id) => {
 const findAll = async () => {
   const [rows] = await pool.query(`
     SELECT u.id, u.code, u.name, u.role, u.created_user_id, u.last_login_at, u.created_at,
-           c.name AS created_user_name
+           c.name AS created_user_name, c.code AS created_user_code
     FROM users u
     LEFT JOIN users c ON c.id = u.created_user_id
     WHERE u.deleted = 0

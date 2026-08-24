@@ -52,5 +52,7 @@ router.post('/:id/confirm', cardController.confirmCard);
 // 取消流转卡：仅管理员（异常处理，与强制清空一致）
 router.use(adminMiddleware);
 router.delete('/:id', cardController.cancelCard);
+// 移动流转卡到另一个料罐：仅管理员
+router.post('/:id/move', cardController.moveCard);
 
 module.exports = router;

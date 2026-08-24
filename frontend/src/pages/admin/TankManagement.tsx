@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
-import { Table, Button, Space, Modal, Tag, message, Image, Segmented, Tabs } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, ClearOutlined, SearchOutlined, AppstoreOutlined, UnorderedListOutlined, SaveOutlined } from '@ant-design/icons';
-import { tankApi, productionLineApi } from '../../services/api';
+import { useEffect, useState, useMemo } from 'react';
+import { Table, Button, Space, Modal, Tag, message, Image, Segmented, Select } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, ClearOutlined, SearchOutlined, AppstoreOutlined, UnorderedListOutlined, SaveOutlined, SwapOutlined } from '@ant-design/icons';
+import { tankApi, cardApi } from '../../services/api';
+import { useTableEnhance } from '../../utils/tableEnhance';
 
 const calcWaitSec = (ts: number | string) => {
   if (!ts) return 0;
@@ -24,8 +25,6 @@ const formatTime = (time: string) => {
 
 export default function TankManagement() {
   const [tanks, setTanks] = useState<any[]>([]);
-  const [lines, setLines] = useState<any[]>([]);
-  const [selectedLineId, setSelectedLineId] = useState<number>(1);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingTank, setEditingTank] = useState<any>(null);
@@ -36,20 +35,15 @@ export default function TankManagement() {
   const [layout, setLayout] = useState({ columns: 4, rows: 3 });
   const [draggingTankId, setDraggingTankId] = useState<number | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  const [moveModalOpen, setMoveModalOpen] = useState(false);
+  const [movingTank, setMovingTank] = useState<any>(null);
+  const [targetTankId, setTargetTankId] = useState<number | null>(null);
+  const [moving, setMoving] = useState(false);
 
-  const loadLines = async () => {
-    try {
-      const res: any = await productionLineApi.getAll();
-      const data = res.data || [];
-      setLines(data);
-      if (data.length > 0) setSelectedLineId(data[0].id);
-    } catch (e) {}
-  };
-
-  const fetchTanks = async (lineId: number = selectedLineId) => {
+  const fetchTanks = async () => {
     setLoading(true);
     try {
-      const res: any = await tankApi.getAll({ production_line_id: lineId });
+      const res: any = await tankApi.getAll();
       setTanks(res.data || []);
     } catch (error) {
       message.error('获取料罐列表失败');
@@ -58,22 +52,19 @@ export default function TankManagement() {
     }
   };
 
-  const fetchLayout = async (lineId: number = selectedLineId) => {
+  const fetchLayout = async () => {
     try {
-      const res: any = await tankApi.getLayout({ production_line_id: lineId });
+      const res: any = await tankApi.getLayout();
       setLayout(res.data || { columns: 4, rows: 3 });
     } catch (error) {
       // 使用默认值
     }
   };
 
-  useEffect(() => { loadLines(); }, []);
   useEffect(() => {
-    if (selectedLineId && lines.length > 0) {
-      fetchTanks(selectedLineId);
-      fetchLayout(selectedLineId);
-    }
-  }, [selectedLineId, lines.length]);
+    fetchTanks();
+    fetchLayout();
+  }, []);
 
   // 拖拽开始
   const handleDragStart = (e: React.DragEvent, tankId: number) => {
@@ -150,7 +141,7 @@ export default function TankManagement() {
         await tankApi.update(editingTank.id, data);
         message.success('更新成功');
       } else {
-        await tankApi.create({ ...data, production_line_id: selectedLineId });
+        await tankApi.create(data);
         message.success('创建成功');
       }
       setModalOpen(false);
@@ -194,6 +185,49 @@ export default function TankManagement() {
     });
   };
 
+  // 打开"移动流转卡"弹窗
+  const handleMoveCard = (tank: any) => {
+    setMovingTank(tank);
+    setTargetTankId(null);
+    setMoveModalOpen(true);
+  };
+
+  // 确认移动
+  const handleMoveSubmit = async () => {
+    if (!movingTank?.current_card_id) {
+      message.error('该罐位无流转卡');
+      return;
+    }
+    if (!targetTankId) {
+      message.error('请选择目标料罐');
+      return;
+    }
+    setMoving(true);
+    try {
+      await cardApi.move(movingTank.current_card_id, targetTankId);
+      message.success('流转卡移动成功');
+      setMoveModalOpen(false);
+      setMovingTank(null);
+      setTargetTankId(null);
+      fetchTanks();
+    } catch (error: any) {
+      message.error(error.message || '移动失败');
+    } finally {
+      setMoving(false);
+    }
+  };
+
+  // 可作为移动目标的料罐：空位且不是当前罐
+  const moveTargetOptions = useMemo(() => {
+    if (!movingTank) return [];
+    return tanks
+      .filter(t => t.id !== movingTank.id && !t.current_card_id && t.status === 'idle')
+      .map(t => ({
+        value: t.id,
+        label: `${t.tank_code}${t.tank_name ? `（${t.tank_name}）` : ''} · 第${t.row_index + 1}行第${t.col_index + 1}列`
+      }));
+  }, [tanks, movingTank]);
+
   const filteredTanks = tanks.filter(t => {
     if (!searchText) return true;
     const keyword = searchText.toLowerCase();
@@ -203,13 +237,15 @@ export default function TankManagement() {
     );
   });
 
-  const columns = [
-    { title: '罐号', dataIndex: 'tank_code', key: 'tank_code', width: 100, fixed: 'left' as const },
-    { title: '名称', dataIndex: 'tank_name', key: 'tank_name', width: 100, render: (v: string) => v || '-' },
+  const baseColumns = useMemo(() => [
+    { title: '罐号', dataIndex: 'tank_code', key: 'tank_code', width: 100, fixed: 'left' as const, sortable: true, searchable: true },
+    { title: '名称', dataIndex: 'tank_name', key: 'tank_name', width: 100, sortable: true, searchable: true, render: (v: string) => v || '-' },
     {
       title: '位置',
       key: 'position',
       width: 120,
+      sortable: true,
+      searchable: false,
       render: (_: any, record: any) => `第${record.row_index + 1}行 第${record.col_index + 1}列`
     },
     {
@@ -217,6 +253,8 @@ export default function TankManagement() {
       dataIndex: 'status',
       key: 'status',
       width: 100,
+      sortable: true,
+      searchable: true,
       render: (status: string, record: any) => {
         if (status === 'timeout' || (record.current_card_id && calcWaitSec(record.created_at_ts) > 4 * 3600)) {
           return <Tag color="red">超时</Tag>;
@@ -231,6 +269,9 @@ export default function TankManagement() {
       title: '当前流转卡',
       key: 'current_card',
       width: 80,
+      resizable: false,
+      sortable: false,
+      searchable: false,
       render: (_: any, record: any) => record.current_card_id ? (
         <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => { setPreviewCard(record); setPreviewOpen(true); }}>
           查看
@@ -240,13 +281,21 @@ export default function TankManagement() {
     {
       title: '操作',
       key: 'action',
-      width: 220,
+      width: 280,
       fixed: 'right' as const,
+      resizable: false,
+      sortable: false,
+      searchable: false,
       render: (_: any, record: any) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
             编辑
           </Button>
+          {record.current_card_id && (
+            <Button size="small" icon={<SwapOutlined />} onClick={() => handleMoveCard(record)}>
+              移动
+            </Button>
+          )}
           {record.current_card_id && (
             <Button size="small" danger icon={<ClearOutlined />} onClick={() => handleForceClear(record.id)}>
               强制清空
@@ -265,22 +314,14 @@ export default function TankManagement() {
         </Space>
       )
     }
-  ];
+  ], [handleEdit, handleForceClear, handleDelete, handleMoveCard]);
+
+  const { columns: enhancedColumns, filteredData } = useTableEnhance(baseColumns, filteredTanks);
 
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <h2 style={{ margin: 0 }}>料罐管理</h2>
-          <Tabs
-            tabPosition="top"
-            activeKey={String(selectedLineId)}
-            onChange={(k) => setSelectedLineId(Number(k))}
-            style={{}}
-            size="small"
-            items={lines.map(l => ({ key: String(l.id), label: l.name }))}
-          />
-        </div>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2 style={{ margin: 0 }}>料罐管理</h2>
         <Space>
           <input
             placeholder="搜索罐号/名称"
@@ -309,11 +350,15 @@ export default function TankManagement() {
 
       {viewMode === 'list' ? (
         <Table
-          columns={columns}
-          dataSource={filteredTanks}
+          columns={enhancedColumns}
+          dataSource={filteredData}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 10, showSizeChanger: false }}
+          pagination={{
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (total) => `共 ${total} 条`
+          }}
           scroll={{ x: 1000 }}
           rowClassName={(record: any) => record.status === 'timeout' ? 'row-timeout' : ''}
         />
@@ -373,7 +418,10 @@ export default function TankManagement() {
                         {!tank.current_card_id && tank.status === 'idle' && <Tag>空位</Tag>}
                         <Button size="small" type="link" icon={<EditOutlined />} onClick={() => handleEdit(tank)}>编辑</Button>
                         {tank.current_card_id && (
-                          <Button size="small" type="link" danger icon={<ClearOutlined />} onClick={() => handleForceClear(tank.id)}>清空</Button>
+                          <>
+                            <Button size="small" type="link" icon={<SwapOutlined />} onClick={() => handleMoveCard(tank)}>移动</Button>
+                            <Button size="small" type="link" danger icon={<ClearOutlined />} onClick={() => handleForceClear(tank.id)}>清空</Button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -402,6 +450,14 @@ export default function TankManagement() {
         open={previewOpen}
         onCancel={() => setPreviewOpen(false)}
         footer={[
+          <Button key="move" icon={<SwapOutlined />} onClick={() => {
+            if (previewCard) {
+              setMoveModalOpen(true);
+              setMovingTank(previewCard);
+              setTargetTankId(null);
+              setPreviewOpen(false);
+            }
+          }}>移动到其他罐</Button>,
           <Button key="clear" danger icon={<ClearOutlined />} onClick={() => {
             if (previewCard) {
               handleForceClear(previewCard.id);
@@ -421,9 +477,54 @@ export default function TankManagement() {
             )}
             <div style={{ marginTop: 16, textAlign: 'left', padding: '12px 16px', background: '#f5f5f5', borderRadius: 6 }}>
               <div style={{ marginBottom: 8 }}><strong>料罐编号：</strong>{previewCard.tank_code}</div>
-              <div style={{ marginBottom: 8 }}><strong>上传人：</strong>{previewCard.created_user_name || '—'}</div>
+              <div style={{ marginBottom: 8 }}><strong>上传人：</strong>
+                {previewCard.created_user_name
+                  ? previewCard.created_user_code
+                    ? `${previewCard.created_user_name}（${previewCard.created_user_code}）`
+                    : previewCard.created_user_name
+                  : '—'}
+              </div>
               <div style={{ marginBottom: 8 }}><strong>挂卡时间：</strong>{formatTime(previewCard.created_at)}</div>
               <div><strong>挂卡时长：</strong>{formatDuration(calcWaitSec(previewCard.created_at_ts))}</div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* 移动流转卡弹窗 */}
+      <Modal
+        title="移动流转卡"
+        open={moveModalOpen}
+        onCancel={() => { setMoveModalOpen(false); setMovingTank(null); setTargetTankId(null); }}
+        footer={[
+          <Button key="cancel" onClick={() => { setMoveModalOpen(false); setMovingTank(null); setTargetTankId(null); }}>取消</Button>,
+          <Button key="submit" type="primary" loading={moving} onClick={handleMoveSubmit}>
+            确认移动
+          </Button>
+        ]}
+        width={440}
+      >
+        {movingTank && (
+          <div>
+            <div style={{ marginBottom: 12, padding: '10px 14px', background: '#f5f5f5', borderRadius: 6 }}>
+              <div style={{ marginBottom: 4 }}><strong>源料罐：</strong>{movingTank.tank_code}{movingTank.tank_name ? `（${movingTank.tank_name}）` : ''}</div>
+              <div><strong>流转卡ID：</strong>{movingTank.current_card_id}</div>
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ display: 'block', marginBottom: 6, color: '#333' }}>选择目标料罐 <span style={{ color: '#ff4d4f' }}>*</span></label>
+              <Select
+                style={{ width: '100%' }}
+                placeholder="请选择空闲罐位"
+                value={targetTankId}
+                onChange={(v) => setTargetTankId(v)}
+                options={moveTargetOptions}
+                notFoundContent="无可用空位"
+                showSearch
+                optionFilterProp="label"
+              />
+            </div>
+            <div style={{ color: '#999', fontSize: 12 }}>
+              💡 仅可选择空闲状态的料罐。移动后源罐位将变为空位，目标罐位变为待入库。
             </div>
           </div>
         )}

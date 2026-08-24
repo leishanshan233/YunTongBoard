@@ -1,17 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { UserOutlined, SettingOutlined, LogoutOutlined } from '@ant-design/icons';
-import { tankApi, cardApi, userApi, systemApi, productionLineApi } from '../../services/api';
+import { tankApi, cardApi, userApi, systemApi } from '../../services/api';
 import { socketService } from '../../services/socket';
 import { isAuthenticated, setStoredToken, setStoredUser, getStoredUser, removeStoredToken } from '../../utils/auth';
 import ChangePasswordModal from '../../components/ChangePasswordModal';
 import './BoardApp.css';
-
-// 从 URL 获取 line 参数
-const getLineParam = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  const params = new URLSearchParams(window.location.search);
-  return params.get('line');
-};
 
 // 格式化时长：始终显示 X时X分
 const formatDuration = (seconds: number) => {
@@ -44,25 +37,20 @@ const BoardApp: React.FC = () => {
   const [countdown, setCountdown] = useState(15);
   const [confirming, setConfirming] = useState(false);
   const [timeoutHours, setTimeoutHours] = useState(4);
+  const [refreshInterval, setRefreshInterval] = useState(5);
   const [todayConfirmed, setTodayConfirmed] = useState(0);
   const [boardLayout, setBoardLayout] = useState({ columns: 4, rows: 3 });
-  const [currentLine, setCurrentLine] = useState<any>(null);  // 当前生产线对象
-  const [allLines, setAllLines] = useState<any[]>([]);       // 所有生产线（用于 URL 无参数时展示选择）
   const [pwdModalOpen, setPwdModalOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 读取当前 line_id：URL?line=X 优先
-  const lineId = getLineParam();
-
-  // 加载数据：按当前生产线筛选
+  // 加载数据
   const loadData = useCallback(async () => {
     try {
-      const lineQuery = lineId ? { production_line_id: lineId } : undefined;
       const [tanksRes, statsRes, layoutRes]: any = await Promise.all([
-        tankApi.getAll(lineQuery),
-        tankApi.getStats(lineQuery).catch(() => ({ success: false, data: {} })),
-        tankApi.getLayout(lineQuery).catch(() => ({ success: false }))
+        tankApi.getAll(),
+        tankApi.getStats().catch(() => ({ success: false, data: {} })),
+        tankApi.getLayout().catch(() => ({ success: false }))
       ]);
       if (tanksRes.success) {
         setTanks(tanksRes.data || []);
@@ -78,25 +66,7 @@ const BoardApp: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [lineId]);
-
-  // 加载当前生产线名和所有线
-  useEffect(() => {
-    if (!loggedIn) return;
-    (async () => {
-      try {
-        const res: any = await productionLineApi.getAll();
-        if (res.success) {
-          const lines = res.data || [];
-          setAllLines(lines);
-          if (lineId) {
-            const found = lines.find((l: any) => String(l.id) === String(lineId));
-            setCurrentLine(found || null);
-          }
-        }
-      } catch (e) { /* ignore */ }
-    })();
-  }, [loggedIn, lineId]);
+  }, []);
 
   // 看板登录
   const handleLogin = async () => {
@@ -133,22 +103,43 @@ const BoardApp: React.FC = () => {
     return () => clearInterval(t);
   }, []);
 
-  // 初始化 + 定时刷新（仅登录后启动）
+  // 加载运行配置（超时阈值 + 刷新间隔）
+  const loadConfigs = useCallback(async () => {
+    try {
+      const [timeoutRes, refreshRes]: any = await Promise.all([
+        systemApi.getConfig('timeout_hours').catch(() => ({ success: false })),
+        systemApi.getConfig('refresh_interval').catch(() => ({ success: false }))
+      ]);
+      if (timeoutRes.success) {
+        const val = parseInt(timeoutRes.data.config_value) || 4;
+        setTimeoutHours(val);
+      }
+      if (refreshRes.success) {
+        const val = parseInt(refreshRes.data.config_value) || 5;
+        setRefreshInterval(val);
+      }
+    } catch (e) {
+      console.error('加载配置失败:', e);
+    }
+  }, []);
+
+  // 初始化：登录后加载数据 + 配置
   useEffect(() => {
     if (!loggedIn) return;
     loadData();
-    const timer = setInterval(loadData, 5000);
-    return () => clearInterval(timer);
-  }, [loggedIn, loadData]);
+    loadConfigs();
+  }, [loggedIn, loadData, loadConfigs]);
 
-  // 加载超时配置（按生产线隔离，仅登录后）
+  // 定时刷新数据（间隔变化时自动重建定时器）
   useEffect(() => {
     if (!loggedIn) return;
-    const params = lineId ? { production_line_id: lineId } : undefined;
-    systemApi.getConfig('timeout_hours', params)
-      .then((d: any) => { if (d.success) setTimeoutHours(parseInt(d.data.config_value) || 4); })
-      .catch(() => {});
-  }, [loggedIn, lineId]);
+    const timer = setInterval(() => {
+      loadData();
+      // 每次数据刷新时顺带重新拉取配置，使管理员修改及时生效
+      loadConfigs();
+    }, refreshInterval * 1000);
+    return () => clearInterval(timer);
+  }, [loggedIn, refreshInterval, loadData, loadConfigs]);
 
   // WebSocket（仅登录后启动）
   useEffect(() => {
@@ -293,66 +284,6 @@ const BoardApp: React.FC = () => {
     );
   }
 
-  // 已登录但未指定 line=X → 显示生产线选择页
-  if (loggedIn && !lineId) {
-    const hasData = allLines.length > 0;
-    return (
-      <div className="board-login-screen">
-        <div className="board-login-box">
-          <div className="board-login-logo">🏭</div>
-          <h1 className="board-login-title">选择生产线</h1>
-          <p className="board-login-subtitle">请选择要查看的生产线看板</p>
-          {!hasData ? (
-            <div style={{ color: '#94a3b8', fontSize: 14 }}>生产线加载中…</div>
-          ) : (
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-              gap: 16,
-              width: '100%',
-              maxWidth: 800
-            }}>
-              {allLines.map(line => (
-                <a
-                  key={line.id}
-                  href={`/board?line=${line.id}`}
-                  style={{
-                    background: 'linear-gradient(135deg, #1e3a5f 0%, #0f2744 100%)',
-                    border: '1px solid #2d4a70',
-                    borderRadius: 12,
-                    padding: '28px 24px',
-                    color: '#e2e8f0',
-                    textDecoration: 'none',
-                    transition: 'all 0.2s',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 8px 24px rgba(99,179,237,0.2)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = '';
-                    e.currentTarget.style.boxShadow = '';
-                  }}
-                >
-                  <div style={{ fontSize: 12, color: '#63b3ed', letterSpacing: 2 }}>
-                    {line.code}
-                  </div>
-                  <div style={{ fontSize: 22, fontWeight: 700 }}>{line.name}</div>
-                  <div style={{ marginTop: 8, fontSize: 13, opacity: 0.7 }}>
-                    点击进入看板 →
-                  </div>
-                </a>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   // 已登录但数据加载中
   if (loading) return <div className="loading-screen">加载中...</div>;
 
@@ -364,7 +295,7 @@ const BoardApp: React.FC = () => {
           <div className="header-logo">📦</div>
           <div>
             <div className="header-title">成品料罐流转卡看板</div>
-            <div className="header-subtitle">{currentLine ? currentLine.name : (lineId ? '生产线加载中…' : '全部生产线')}</div>
+            <div className="header-subtitle">造粒车间·一号包装线</div>
           </div>
         </div>
 
@@ -519,7 +450,7 @@ const BoardApp: React.FC = () => {
           <div className="footer-item"><span className="icon">●</span>确认入库完成后，卡片消失，料罐恢复空位</div>
           <div className="footer-item"><span className="icon">●</span>15秒无操作自动关闭弹窗</div>
         </div>
-        <div className="footer-right">数据每5秒自动刷新 | 广州数维工场软件有限公司</div>
+        <div className="footer-right">数据每{refreshInterval}秒自动刷新 | 广州数维工场软件有限公司</div>
       </div>
 
       {/* 确认入库弹窗 - 按设计稿 */}

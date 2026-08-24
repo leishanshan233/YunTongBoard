@@ -1,5 +1,13 @@
 const { pool } = require('../config/db');
 
+// 清洗 IP 地址：去除 ::ffff: 前缀（IPv4 映射的 IPv6 格式）
+const normalizeIp = (ip) => {
+  if (!ip) return null;
+  // ::ffff:127.0.0.1 → 127.0.0.1
+  const match = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  return match ? match[1] : ip;
+};
+
 const create = async (conn, data) => {
   const db = conn || pool;
   await db.execute(
@@ -10,7 +18,7 @@ const create = async (conn, data) => {
       data.tank_id || null,
       data.card_id || null,
       data.details ? JSON.stringify(data.details) : null,
-      data.ip_address || null
+      normalizeIp(data.ip_address)
     ]
   );
 };
@@ -37,7 +45,7 @@ const findList = async (params = {}) => {
   );
 
   const [rows] = await pool.execute(`
-    SELECT l.*, u.name AS created_user_name
+    SELECT l.*, u.name AS created_user_name, u.code AS created_user_code
     FROM operation_logs l
     LEFT JOIN users u ON u.id = l.created_user_id
     ${whereClause}
